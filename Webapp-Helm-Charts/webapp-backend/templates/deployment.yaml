@@ -1,0 +1,265 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ template "serviceAccountName" .}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ template "roleName" .}}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ template "roleBindingName" .}}
+roleRef:
+  kind: Role
+  name: {{ template "roleName" .}}
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "serviceAccountName" .}}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "configMapName" . }}
+data:
+  WEBAPP_PORT: "3000"
+  DB_HOST_NAME: {{ .Values.rdsEndpoint }}
+  DB_DATABASE_NAME: csye7374
+  DB_PORT: "5432"
+  S3_BUCKET: {{ .Values.s3Bucket }}
+  REDIS_HOST: {{ include "redisHost" . | squote }}
+  REDIS_PORT: {{ .Values.redisPort | quote }}
+  SENTINEL_PORT: {{ .Values.sentinelPort | quote }}
+  ENVIRONMENT: {{ .Values.environment }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ template "dbsecretName" .}}
+type: Opaque
+stringData:
+  DB_USER: {{ .Values.dbUser }}
+  DB_PASSWORD: {{ .Values.dbPassword }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ template "awssecretName" .}}
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID: {{ .Values.awsAccess }}
+  AWS_SECRET_ACCESS_KEY: {{ .Values.awsSecret }}
+---  
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ template "redisSecretName" .}}
+type: Opaque
+stringData:
+  REDIS_PASSWORD: {{ .Values.redis.global.redis.password }}
+---  
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ template "dockerregistrykeyName" .}}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ template "imagePullSecret" . }}
+---
+{{ if .Values.dockerImage }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{template "deploymentName" .}}
+  labels:
+    app: {{ template "labelName" .}}
+spec:
+  replicas: 1
+  minReadySeconds: 10
+  revisionHistoryLimit: 3
+  strategy: 
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: {{ template "labelName" .}}
+  template:
+    metadata:
+      labels:
+        app: {{ template "labelName" .}}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"  
+    spec:
+      serviceAccountName: {{ template "serviceAccountName" .}}
+      initContainers:
+        - name: {{ template "initContainerName" . }}
+          image: goodsmileduck/redis-cli:latest
+          command: ['sh', '-c', 'until redis-cli -h {{include "redisHost" .}} -p {{.Values.redisPort}} -a {{.Values.redis.global.redis.password}} SET test 1 EX 10; do echo "waiting to connect to redis"; done;']
+      containers:
+      - name: {{ template "labelName" .}}
+        image: {{ .Values.dockerImage }}
+        env:
+        - name: WEBAPP_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: WEBAPP_PORT
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "dbsecretName" .}} 
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "dbsecretName" .}} 
+              key: DB_PASSWORD
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "awssecretName" .}} 
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "awssecretName" .}} 
+              key: AWS_SECRET_ACCESS_KEY      
+        - name: DB_HOST_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: DB_HOST_NAME
+        - name: DB_DATABASE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: DB_DATABASE_NAME  
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: DB_PORT
+        - name: S3_BUCKET
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: S3_BUCKET
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: REDIS_PORT
+        - name: SENTINEL_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: SENTINEL_PORT      
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              name: {{ template "configMapName" . }}
+              key: ENVIRONMENT       
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "redisSecretName" . }}
+              key: REDIS_PASSWORD   
+        resources:
+          requests:
+            cpu: 500m 
+            memory: 100Mi                       
+        ports:
+          - containerPort: 3000
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 30
+          httpGet:
+            path: /testCache?key=foo&val=bar
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 100  
+      imagePullSecrets:
+      - name: {{ template "dockerregistrykeyName" .}}
+{{ end }}
+---
+{{ if .Values.dockerImage }} 
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-{{ template "labelName" .}}
+  namespace: api
+spec:
+  scaleTargetRef:      
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{template "deploymentName" .}}
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 3
+{{ end }}
+---
+{{ if .Values.dockerImage }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "serviceName" .}}
+  labels:
+    name: {{ template "labelName" .}}
+  # namespace: {{ .Values.namespace }}
+spec:
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  selector:
+    app: {{ template "labelName" .}}
+{{ end }}
+---
+{{ if .Values.dockerImage }}
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: {{ template "ingressName" .}}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
+    ingress.kubernetes.io/ssl-redirect: "true"
+    certmanager.k8s.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls: # < placing a host in the TLS config will indicate a certificate should be created
+    - hosts:
+        - {{ template "webappDomainName" .}}
+      secretName: webapp-acme-crt-secret
+  rules:
+  - host: {{ template "webappDomainName" .}}
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: {{ template "serviceName" .}}
+          servicePort: 3000
+      # - path: {{ template "path" .}}
+      #   backend:
+      #     serviceName: {{ template "serviceName" .}}
+      #     servicePort: 3000
+{{ end }}

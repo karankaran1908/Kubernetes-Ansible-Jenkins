@@ -1,0 +1,31 @@
+dbUser: ""
+dbPassword: ""
+rdsEndpoint: ""
+imageCredentials:
+  registry: https://index.docker.io/v1/
+  username: ""
+  password: ""
+dockerImage: cyrilsebastian1811/backend:3ae459e
+s3Bucket: ""
+awsAccess: ""
+awsSecret: ""
+namespace: api
+# redisHost: example-redis.api.svc.cluster.local
+redisPort: 6379
+sentinelPort: 26379
+environment: production
+redis:
+  global:
+    redis:
+      password: ""
+  cluster:
+    slaveCount: 0
+    enabled: true
+  sentinel:
+    enabled: true
+    usePassword: false
+  master:
+    readinessProbe:
+      failureThreshold: 3
+
+domainName: ""

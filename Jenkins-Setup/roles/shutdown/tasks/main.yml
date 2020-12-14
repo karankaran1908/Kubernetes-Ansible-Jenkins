@@ -1,0 +1,81 @@
+---
+
+- name: 'gather all the ec2 instance'
+  ec2_instance_info:
+    filters:
+      {tag-key: "{{key}}", tag-value: "{{value}}", "instance-state-name": running}
+  register: ec2
+
+- name: De-associate public ip
+  ec2_eip:
+    device_id: "{{ ec2.instances[0].instance_id }}"
+    ip: "{{ elastic_ip }}"
+    state: absent
+
+- name: 'Terminate EC2 Instance(s)'
+  ec2:
+    instance_ids: '{{ item.instance_id }}'
+    state: absent
+    wait: true
+  with_items: "{{ ec2.instances }}"
+
+- ec2_vpc_net_info:
+    filters:
+      "tag:Name": Infrastructure
+  register: vpc
+
+- name:               'Set VPC ID in variable'
+  set_fact:
+    vpc_id:           "{{ vpc.vpcs[0].vpc_id }}"
+
+
+- name: 'Remove subnet1 from Vpc'
+  ec2_vpc_subnet:
+    state: absent
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr1 }}"
+
+- name: 'Remove subnet2 from Vpc'
+  ec2_vpc_subnet:
+    state: absent
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr2 }}"
+
+- name: 'Remove subnet3 from Vpc'
+  ec2_vpc_subnet:
+    state: absent
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr3 }}"
+
+
+- ec2_vpc_route_table_info:
+    region: "{{ lookup('env','AWS_REGION') }}"
+    filters:
+      "tag:Name": "Route_Table"
+  register: route
+
+
+- name: "Delete security group by its id"
+  ec2_group:
+    name: Web DMZ
+    state: absent
+
+
+- name : "Delete internet gateway"
+  ec2_vpc_igw:
+    vpc_id:  "{{ vpc_id }}"
+    state: absent
+  register: deligw
+
+- name: delete route table
+  ec2_vpc_route_table:
+    vpc_id: "{{ vpc_id }}"
+    route_table_id: "{{ route.route_tables[0].id }}"
+    lookup: id
+    state: absent
+
+- name: delete VPC
+  ec2_vpc_net:
+    name: "{{ vpc_name }}"
+    cidr_block: "{{ vpc_cidr_block }}"
+    state: absent

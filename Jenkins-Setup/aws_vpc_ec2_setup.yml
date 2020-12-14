@@ -1,0 +1,10 @@
+-
+  hosts: local
+  roles:
+    - vpcec2
+-
+  hosts: launched
+  gather_facts: true
+  become: true
+  roles:
+    - jenkins

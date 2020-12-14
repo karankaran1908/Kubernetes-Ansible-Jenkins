@@ -1,0 +1,148 @@
+---
+- name: create VPC
+  ec2_vpc_net:
+    name: "{{ vpc_name }}"
+    cidr_block: "{{ vpc_cidr_block }}"
+    state: present
+  register: vpc
+
+- name: set VPC ID in variable
+  set_fact:
+    vpc_id: "{{ vpc.vpc.id }}"
+
+- name: associate subnet to the VPC
+  ec2_vpc_subnet:
+    state: present
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr1 }}"
+    az: "{{ lookup('env','AWS_REGION') }}a"
+    map_public: yes
+  register: subnet1
+
+- name: associate subnet to the VPC
+  ec2_vpc_subnet:
+    state: present
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr2 }}"
+    az: "{{ lookup('env','AWS_REGION') }}b"
+    map_public: yes
+  register: subnet2
+
+- name: associate subnet to the VPC
+  ec2_vpc_subnet:
+    state: present
+    vpc_id: "{{ vpc_id }}"
+    cidr: "{{ subnet_cidr3 }}"
+    az: "{{ lookup('env','AWS_REGION') }}c"
+    map_public: yes
+  register: subnet3
+
+
+- name: create IGW
+  ec2_vpc_igw:
+    vpc_id: "{{ vpc_id }}"
+    state: "present"
+    tags:
+      Name: "{{ igw_name }}"
+  register: igw
+
+- name: Route IGW
+  ec2_vpc_route_table:
+      vpc_id: "{{ vpc_id }}"
+      subnets:
+        - "{{ subnet1.subnet.id }}"
+        - "{{ subnet2.subnet.id }}"
+        - "{{ subnet3.subnet.id }}"
+      routes:
+        - dest: 0.0.0.0/0
+          gateway_id: "{{ igw.gateway_id  }}"
+      tags:
+        Name: "Route_Table"
+
+- name: Create Security Group
+  ec2_group:
+      name: Web DMZ
+      description: DMZ Security Group
+      vpc_id: "{{ vpc_id }}"
+      rules:
+        - proto: tcp
+          ports:
+            - 80
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          ports:
+            - 22
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          ports:
+            - 443
+          cidr_ip: 0.0.0.0/0
+        - proto: tcp
+          ports:
+            - 8080
+          cidr_ip: 0.0.0.0/0
+  register: security_group
+
+- name: Create a Ec2 server
+  ec2:
+      assign_public_ip: "no"
+      image: ami-04b9e92b5572fa0d1
+      instance_type : "{{ ec2_instance_size }}"
+      group_id: "{{ security_group.group_id }}"
+      vpc_subnet_id: "{{ subnet1.subnet.id }}"
+      keypair: "{{key_pair}}"
+      exact_count: 1
+      count_tag:
+        app: jenkins
+      instance_tags:
+        app: jenkins
+      wait: true
+  register : Myec2
+
+- name: Get details of ec2 instance
+  ec2_instance_info:
+    filters:
+      "tag:app": jenkins
+      "instance-state-name": running
+  register: ec2_jenkins
+
+- name: Associate public ip
+  ec2_eip:
+    device_id: "{{ ec2_jenkins.instances[0].instance_id }}"
+    ip: "{{ elastic_ip }}"
+
+- name: Add A record for the new EC2 instance IP in Route53.
+  route53:
+    command: create
+    zone: "{{route53_zone_name}}"
+    record: "{{route53_record_name}}"
+    type: A
+    ttl: 60
+    value: "{{ elastic_ip }}"
+    wait: true
+    overwrite: true
+
+- name: Add new instance to host group
+  add_host:
+      hostname: "{{ elastic_ip }}"
+      groupname: launched
+      ansible_ssh_user: ubuntu
+
+- name: Let's wait for SSH to come up. Usually that takes ~10 seconds
+  local_action: wait_for
+    host={{ elastic_ip }}
+    port=22
+    state=started
+
+- name: Add new instance to host group
+  add_host:
+    groupname: launched
+    hostname: "{{ elastic_ip }}"
+    ansible_ssh_user: ubuntu
+    host_key_checking: false
+
+- name: Let's wait for SSH to come up. Usually that takes ~10 seconds
+  local_action: wait_for
+    host={{ elastic_ip }}
+    port=22
+    state=started

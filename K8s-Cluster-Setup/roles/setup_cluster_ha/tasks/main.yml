@@ -1,0 +1,35 @@
+- name: check for cluster
+  command: "kops get clusters"
+  register: clusters
+  ignore_errors: true
+
+#- debug:
+#    var: clusters
+
+- name: create kops cluster
+  command: "kops create cluster \
+              --cloud=aws \
+              --kubernetes-version={{ kubernetes_version }} \
+              --master-zones={{ az_info.availability_zones[0].zone_name }},{{ az_info.availability_zones[1].zone_name }},{{ az_info.availability_zones[2].zone_name }} \
+              --zones={{ az_info.availability_zones[0].zone_name }},{{ az_info.availability_zones[1].zone_name }},{{ az_info.availability_zones[2].zone_name }} \
+              --node-count={{ compute_nodes }} \
+              --topology private \
+              --networking kopeio-vxlan \
+              --node-size={{ compute_node_size }} \
+              --master-size={{ master_node_size }} \
+              --dns-zone={{ dns_zone }}
+              --ssh-public-key={{ ssh_key }} \
+              --bastion=true \
+              {{ cluster_name }}"
+  when: "'{{ cluster_name }}' not in clusters.stdout"
+
+- name: deploy the cluster
+  command: "kops update cluster {{ cluster_name }}  --yes"
+
+- name: validate the cluster
+  command: "kops validate cluster"
+  retries: 20
+  delay: 60
+  register: result
+  until: result.rc == 0
+

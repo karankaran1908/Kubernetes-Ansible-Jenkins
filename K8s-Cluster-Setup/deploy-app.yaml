@@ -1,0 +1,7 @@
+---
+- hosts: local
+  tasks:
+    - import_role:
+        name: deploy_backend
+    - import_role:
+        name: deploy_frontend    
